@@ -74,8 +74,8 @@ impl ProjectsDatabase {
 
     /// Reacts to changes in the file system.
     pub fn on_file_changed(&mut self, path: &Path) {
-        if let Some(digest) = Digestible::try_new(path) {
-            let digest = digest.intern(self);
+        if let Some(digestible) = Digestible::try_new(path) {
+            let digest = digestible.intern(self);
 
             // Invalidate the digest of the changed file, causing relevant projects to reload.
             invalidate_digest(self, digest);
