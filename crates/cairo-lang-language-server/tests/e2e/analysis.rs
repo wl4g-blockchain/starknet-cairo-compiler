@@ -164,6 +164,7 @@ fn edit_cairo_project() {
         "#}
     );
 
+    ls.checkpoint();
     ls.overwrite(
         "cairo_project.toml",
         indoc! {r#"
@@ -174,6 +175,7 @@ fn edit_cairo_project() {
             edition = "2024_07"
         "#},
     );
+    ls.wait_for_diagnostics("src/lib.cairo");
 
     let output = ls.send_request::<lsp::ext::ViewAnalyzedCrates>(());
     assert_eq!(
@@ -206,6 +208,7 @@ fn edit_cairo_project() {
         "#}
     );
 
+    ls.checkpoint();
     ls.overwrite(
         "cairo_project.toml",
         indoc! {r#"
@@ -216,6 +219,7 @@ fn edit_cairo_project() {
             edition = "2024_07"
         "#},
     );
+    ls.wait_for_diagnostics("src/lib.cairo");
 
     let output = ls.send_request::<lsp::ext::ViewAnalyzedCrates>(());
     assert_eq!(

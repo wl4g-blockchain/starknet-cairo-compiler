@@ -38,6 +38,7 @@ pub struct MockClient {
     input_tx: mpsc::Sender<Message>,
     output_rx: mpsc::Receiver<Message>,
     trace: Vec<Message>,
+    trace_checkpoint: usize,
     workspace_configuration: Value,
     server_capabilities: lsp_types::ServerCapabilities,
     expect_request_handlers: VecDeque<ExpectRequestHandler>,
@@ -75,6 +76,7 @@ impl MockClient {
             input_tx: requests_tx,
             output_rx: responses_rx,
             trace: Vec::new(),
+            trace_checkpoint: 0,
             workspace_configuration,
             server_capabilities: Default::default(),
             expect_request_handlers: Default::default(),
@@ -249,14 +251,6 @@ impl MockClient {
     }
 }
 
-/// Introspection.
-impl MockClient {
-    /// Gets a list of messages received from the server.
-    pub fn trace(&self) -> &[Message] {
-        &self.trace
-    }
-}
-
 #[derive(Debug)]
 enum RecvError {
     Timeout,
@@ -273,7 +267,7 @@ impl From<tokio::time::error::Elapsed> for RecvError {
 impl MockClient {
     /// Receives a message from the server.
     async fn recv(&mut self) -> Result<Option<Message>, RecvError> {
-        const TIMEOUT: Duration = Duration::from_secs(2 * 60);
+        const TIMEOUT: Duration = Duration::from_secs(10);
         let message = timeout(TIMEOUT, self.output_rx.next()).await?;
 
         if let Some(message) = &message {
@@ -295,7 +289,7 @@ impl MockClient {
         &mut self,
         predicate: impl Fn(&Message) -> Option<T>,
     ) -> Result<T, RecvError> {
-        for message in &self.trace {
+        for message in self.trace_since_checkpoint() {
             if let Some(ret) = predicate(message) {
                 return Ok(ret);
             }
@@ -337,6 +331,18 @@ impl MockClient {
                 .expect("failed to parse notification params");
             predicate(&params).then_some(params)
         })
+    }
+
+    pub fn checkpoint(&mut self) {
+        self.trace_checkpoint = self.trace.len();
+    }
+
+    /// Gets a list of messages received from the server since the active checkpoint.
+    ///
+    /// If there is no active checkpoint, this will return all messages.
+    pub fn trace_since_checkpoint(&self) -> &[Message] {
+        assert!(self.trace_checkpoint <= self.trace.len());
+        &self.trace[self.trace_checkpoint..]
     }
 }
 

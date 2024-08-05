@@ -44,7 +44,7 @@ fn relative_path_to_core() {
     assert!(diags.diagnostics.is_empty());
 
     assert_eq!(
-        ls.trace()
+        ls.trace_since_checkpoint()
             .iter()
             .filter(|msg| {
                 let Message::Request(req) = msg else { return false };
