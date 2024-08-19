@@ -7,12 +7,15 @@ use std::sync::Arc;
 use anyhow::{bail, ensure, Context, Result};
 use cairo_lang_filesystem::db::{CrateSettings, Edition, ExperimentalFeaturesConfig};
 use cairo_lang_utils::LookupIntern;
+use salsa::Durability;
 use scarb_metadata::{Metadata, PackageMetadata};
 use tracing::{debug, error, warn};
 
+use crate::project::digests::report_digest_dependency;
 use crate::project::main::{LsProjectsGroup, ProjectId};
 use crate::project::project_manifest_path::ProjectManifestPath;
 use crate::project::Crate;
+use crate::toolchain::scarb::SCARB_LOCK;
 
 /// Gets the list of crates from a Scarb-based project.
 ///
@@ -186,13 +189,29 @@ pub fn scarb_metadata(db: &dyn LsProjectsGroup, project: ProjectId) -> Option<Ar
         return None;
     };
 
-    db.scarb_toolchain()
+    report_digest_dependency(db.upcast(), &manifest_path);
+    report_digest_dependency(db.upcast(), &manifest_path.with_file_name(SCARB_LOCK));
+
+    db.salsa_runtime().report_synthetic_read(Durability::LOW);
+    let metadata = db
+        .scarb_toolchain()
         .metadata(&manifest_path)
         .with_context(|| format!("failed to reload scarb workspace: {}", manifest_path.display()))
         .inspect_err(|e| {
+            db.salsa_runtime().report_untracked_read();
+
             // TODO(mkaput): Send a notification to the language client about the error.
             error!("{e:?}");
         })
         .ok()
-        .map(Arc::new)
+        .map(Arc::new)?;
+
+    for member in &metadata.workspace.members {
+        if let Some(package) = metadata.get_package(member) {
+            let manifest_path = package.manifest_path.as_std_path();
+            report_digest_dependency(db.upcast(), manifest_path);
+        }
+    }
+
+    Some(metadata)
 }
