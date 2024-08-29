@@ -653,12 +653,13 @@ define_top_level_language_element_id!(
     intern_variant
 );
 
+// TODO(Tomer-StarkWare): Change the name to reflect the entire elements.
 define_language_element_id_as_enum! {
     /// Id for any variable definition.
     pub enum VarId {
         Param(ParamId),
         Local(LocalVarId),
-        Const(LocalConstId),
+        Const(StatementItemId),
         // TODO(spapini): Add var from pattern matching.
     }
 }
@@ -951,24 +952,41 @@ impl DebugWithDb<dyn DefsGroup> for LocalVarLongId {
     }
 }
 
-define_language_element_id_basic!(
+define_top_level_language_element_id!(
     LocalConstId,
     LocalConstLongId,
-    ast::TerminalIdentifier,
+    ast::ItemConstant,
     lookup_intern_local_const,
     intern_local_const
 );
 
-impl DebugWithDb<dyn DefsGroup> for LocalConstLongId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>, db: &dyn DefsGroup) -> std::fmt::Result {
-        let syntax_db = db.upcast();
-        let LocalConstLongId(module_file_id, ptr) = self;
-        let text = ptr.lookup(syntax_db).text(syntax_db);
-        // TODO(Tomer-StarkWare): Fix the path to the constant to include the function containing
-        // the constant.
-        write!(f, "LocalConstId({}::{})", module_file_id.0.full_path(db), text)
-    }
-}
+// impl DebugWithDb<dyn DefsGroup> for LocalConstLongId {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>, db: &dyn DefsGroup) -> std::fmt::Result {
+//         let syntax_db = db.upcast();
+//         let LocalConstLongId(module_file_id, ptr) = self;
+//         let text = ptr.lookup(syntax_db).text(syntax_db);
+//         // TODO(Tomer-StarkWare): Fix the path to the constant to include the function containing
+//         // the constant.
+//         write!(f, "LocalConstId({}::{})", module_file_id.0.full_path(db), text)
+//     }
+// }
+
+define_top_level_language_element_id!(
+    LocalUseId,
+    LocalUseLongId,
+    ast::UsePathLeaf,
+    lookup_intern_local_use,
+    intern_local_use
+);
+
+// impl DebugWithDb<dyn DefsGroup> for LocalUseLongId {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>, db: &dyn DefsGroup) -> std::fmt::Result {
+//         let syntax_db = db.upcast();
+//         let LocalUseLongId(module_file_id, ptr) = self;
+//         let text = ptr.lookup(syntax_db).text(syntax_db);
+//         write!(f, "LocalUseId({}::{})", module_file_id.0.full_path(db), text)
+//     }
+// }
 
 define_language_element_id_as_enum! {
     #[toplevel]
@@ -1066,6 +1084,30 @@ impl From<GenericItemId> for LookupItemId {
             GenericItemId::ImplItem(impl_item) => match impl_item {
                 GenericImplItemId::Type(id) => LookupItemId::ImplItem(ImplItemId::Type(id)),
             },
+        }
+    }
+}
+
+define_language_element_id_as_enum! {
+    #[toplevel]
+    /// Id for direct children of a trait.
+    pub enum StatementItemId {
+        Constant(LocalConstId),
+        Use(LocalUseId),
+    }
+}
+
+impl StatementItemId {
+    pub fn name(&self, db: &dyn DefsGroup) -> SmolStr {
+        match self {
+            StatementItemId::Constant(id) => id.name(db),
+            StatementItemId::Use(id) => id.name(db),
+        }
+    }
+    pub fn stable_ptr(&self, db: &dyn DefsGroup) -> SyntaxStablePtrId {
+        match self {
+            StatementItemId::Constant(id) => id.stable_ptr(db).into(),
+            StatementItemId::Use(id) => id.stable_ptr(db).into(),
         }
     }
 }

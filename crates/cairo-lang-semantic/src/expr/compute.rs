@@ -8,11 +8,12 @@ use std::sync::Arc;
 
 use ast::PathSegment;
 use cairo_lang_debug::DebugWithDb;
-use cairo_lang_defs::db::validate_attributes_flat;
+use cairo_lang_defs::db::{get_all_path_leaves, validate_attributes_flat};
 use cairo_lang_defs::diagnostic_utils::StableLocation;
 use cairo_lang_defs::ids::{
-    EnumId, FunctionTitleId, GenericKind, LanguageElementId, LocalConstLongId, LocalVarLongId,
-    LookupItemId, MemberId, ModuleItemId, NamedLanguageElementId, TraitFunctionId, TraitId, VarId,
+    EnumId, FunctionTitleId, GenericKind, LanguageElementId, LocalConstLongId, LocalUseLongId,
+    LocalVarLongId, LookupItemId, MemberId, ModuleItemId, NamedLanguageElementId, StatementItemId,
+    TraitFunctionId, TraitId, VarId,
 };
 use cairo_lang_defs::plugin::MacroPluginMetadata;
 use cairo_lang_diagnostics::{skip_diagnostic, Maybe, ToOption};
@@ -66,6 +67,7 @@ use crate::items::feature_kind::extract_item_feature_config;
 use crate::items::functions::function_signature_params;
 use crate::items::imp::{filter_candidate_traits, infer_impl_by_self};
 use crate::items::modifiers::compute_mutability;
+use crate::items::us::get_use_segments;
 use crate::items::visibility;
 use crate::literals::try_extract_minus_literal;
 use crate::resolve::{ResolvedConcreteItem, ResolvedGenericItem, Resolver};
@@ -78,8 +80,8 @@ use crate::types::{
 };
 use crate::usage::Usages;
 use crate::{
-    ConcreteEnumId, ConcreteTraitLongId, GenericArgumentId, GenericParam, LocalConstant, Member,
-    Mutability, Parameter, PatternStringLiteral, PatternStruct, Signature,
+    ConcreteEnumId, ConcreteTraitLongId, GenericArgumentId, GenericParam, LocalItem, LocalItemKind,
+    Member, Mutability, Parameter, PatternStringLiteral, PatternStruct, Signature,
 };
 
 /// Expression with its id.
@@ -207,7 +209,7 @@ impl<'ctx> ComputationContext<'ctx> {
     fn add_unused_binding_warning(&mut self, var_name: &str, var: &Binding) {
         if !self.environment.used_variables.contains(&var.id()) && !var_name.starts_with('_') {
             match var {
-                Binding::LocalConst(_) => {
+                Binding::LocalItem(_) => {
                     self.diagnostics.report(var.stable_ptr(self.db.upcast()), UnusedConstant);
                 }
                 Binding::LocalVar(_) | Binding::Param(_) => {
@@ -3067,11 +3069,12 @@ pub fn get_binded_expr_by_name(
         if let Some(var) = env.variables.get(variable_name) {
             env.used_variables.insert(var.id());
             return match var {
-                Binding::LocalConst(local_const) => Some(Expr::Constant(ExprConstant {
-                    const_value_id: local_const.value,
-                    ty: local_const.ty,
-                    stable_ptr,
-                })),
+                Binding::LocalItem(local_const) => match local_const.kind.clone() {
+                    crate::LocalItemKind::Constant(const_value_id, ty) => {
+                        Some(Expr::Constant(ExprConstant { const_value_id, ty, stable_ptr }))
+                    }
+                },
+
                 Binding::LocalVar(_) | Binding::Param(_) => {
                     Some(Expr::Var(ExprVar { var: var.id(), ty: var.ty(), stable_ptr }))
                 }
@@ -3318,11 +3321,10 @@ pub fn compute_statement_semantic(
                 if let Some(old_var) =
                     ctx.environment.variables.insert(v.name.clone(), var_def.clone())
                 {
-                    if matches!(old_var, Binding::LocalConst(_)) {
-                        return Err(ctx.diagnostics.report(
-                            v.stable_ptr,
-                            MultipleDefinitionforConstantVariable(v.name.clone()),
-                        ));
+                    if matches!(old_var, Binding::LocalItem(_)) {
+                        return Err(ctx
+                            .diagnostics
+                            .report(v.stable_ptr, MultipleDefinitionforItem(v.name.clone())));
                     }
                     ctx.add_unused_binding_warning(&v.name, &old_var);
                 }
@@ -3473,44 +3475,103 @@ pub fn compute_statement_semantic(
                         explicit_type,
                     );
                     let name_syntax = const_syntax.name(syntax_db);
+                    let name = name_syntax.text(db.upcast());
                     let rhs_id =
-                        LocalConstLongId(ctx.resolver.module_file_id, name_syntax.stable_ptr())
-                            .intern(ctx.db);
-                    let name = const_syntax.name(syntax_db).text(db.upcast());
-                    if let Some(old_var) = ctx.environment.variables.insert(
-                        name.clone(),
-                        Binding::LocalConst(LocalConstant {
-                            id: rhs_id,
-                            value: db.intern_const_value(rhs_resolved_expr.clone()),
-                            ty: rhs_resolved_expr.ty(db.upcast())?,
-                        }),
-                    ) {
+                        LocalConstLongId(ctx.resolver.module_file_id, const_syntax.stable_ptr());
+                    let var_def = Binding::LocalItem(LocalItem {
+                        id: StatementItemId::Constant(rhs_id.intern(db)),
+                        // stable_ptr: name_syntax.stable_ptr().untyped(),
+                        kind: LocalItemKind::Constant(
+                            db.intern_const_value(rhs_resolved_expr.clone()),
+                            rhs_resolved_expr.ty(db.upcast())?,
+                        ),
+                    });
+                    if let Some(old_var) =
+                        ctx.environment.variables.insert(name.clone(), var_def.clone())
+                    {
                         return Err(ctx.diagnostics.report(
                             stmt_item_syntax.stable_ptr(),
                             match old_var {
-                                Binding::LocalConst(_) => MultipleConstantDefinition(name),
+                                Binding::LocalItem(_) => MultipleConstantDefinition(name),
                                 Binding::LocalVar(_) | Binding::Param(_) => {
-                                    MultipleDefinitionforConstantVariable(name)
+                                    MultipleDefinitionforItem(name)
                                 }
                             },
                         ));
                     }
-                    ctx.semantic_defs.insert(
-                        VarId::Const(rhs_id),
-                        Binding::LocalConst(LocalConstant {
-                            id: rhs_id,
-                            value: db.intern_const_value(rhs_resolved_expr.clone()),
-                            ty: rhs_resolved_expr.ty(db.upcast())?,
-                        }),
-                    );
-                    semantic::Statement::Item(semantic::StatementItem {
-                        stable_ptr: syntax.stable_ptr(),
-                    })
+                    ctx.semantic_defs.insert(var_def.id(), var_def);
+                }
+                ast::ModuleItem::Use(use_syntax) => {
+                    let path_leaves =
+                        get_all_path_leaves(db.upcast(), use_syntax.use_path(syntax_db));
+                    for leaf in path_leaves.iter() {
+                        let mut segments = vec![];
+                        get_use_segments(
+                            db.upcast(),
+                            &ast::UsePath::Leaf(leaf.clone()),
+                            &mut segments,
+                        )?;
+                        let resolved_item = ctx.resolver.resolve_generic_path(
+                            ctx.diagnostics,
+                            segments,
+                            NotFoundItemType::Identifier,
+                        )?;
+
+                        let path_segment = leaf.ident(db.upcast());
+                        let name = path_segment.identifier(db.upcast());
+                        let var_def_id = StatementItemId::Use(
+                            LocalUseLongId(ctx.resolver.module_file_id, leaf.stable_ptr())
+                                .intern(db),
+                        );
+                        match resolved_item {
+                            ResolvedGenericItem::GenericConstant(const_id) => {
+                                let const_value = db.constant_const_value(const_id)?;
+                                let var_def = Binding::LocalItem(LocalItem {
+                                    id: var_def_id,
+                                    // stable_ptr: leaf.stable_ptr().untyped(),
+                                    kind: LocalItemKind::Constant(
+                                        db.intern_const_value(const_value.clone()),
+                                        db.constant_const_type(const_id)?,
+                                    ),
+                                });
+
+                                if let Some(old_var) =
+                                    ctx.environment.variables.insert(name.clone(), var_def.clone())
+                                {
+                                    return Err(ctx.diagnostics.report(
+                                        stmt_item_syntax.stable_ptr(),
+                                        match old_var {
+                                            Binding::LocalItem(_) => {
+                                                MultipleConstantDefinition(name)
+                                            }
+                                            Binding::LocalVar(_) | Binding::Param(_) => {
+                                                MultipleDefinitionforItem(name)
+                                            }
+                                        },
+                                    ));
+                                }
+                                ctx.semantic_defs.insert(var_def.id(), var_def);
+                            }
+                            ResolvedGenericItem::Module(_)
+                            | ResolvedGenericItem::GenericFunction(_)
+                            | ResolvedGenericItem::TraitFunction(_)
+                            | ResolvedGenericItem::GenericType(_)
+                            | ResolvedGenericItem::GenericTypeAlias(_)
+                            | ResolvedGenericItem::GenericImplAlias(_)
+                            | ResolvedGenericItem::Variant(_)
+                            | ResolvedGenericItem::Trait(_)
+                            | ResolvedGenericItem::Impl(_)
+                            | ResolvedGenericItem::Variable(_) => {
+                                return Err(ctx
+                                    .diagnostics
+                                    .report(leaf.stable_ptr(), UnsupportedUseItemInStatement));
+                            }
+                        }
+                    }
                 }
                 ast::ModuleItem::Module(_) => {
                     unreachable!("Modules are not supported inside a function.")
                 }
-                ast::ModuleItem::Use(_) => unreachable!("Use type not supported."),
                 ast::ModuleItem::FreeFunction(_) => {
                     unreachable!("FreeFunction type not supported.")
                 }
@@ -3528,6 +3589,7 @@ pub fn compute_statement_semantic(
                 ast::ModuleItem::HeaderDoc(_) => unreachable!("HeaderDoc type not supported."),
                 ast::ModuleItem::Missing(_) => unreachable!("Missing type not supported."),
             }
+            semantic::Statement::Item(semantic::StatementItem { stable_ptr: syntax.stable_ptr() })
         }
         ast::Statement::Missing(_) => todo!(),
     };
