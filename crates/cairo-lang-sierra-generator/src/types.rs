@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::vec;
 
-use cairo_lang_debug::DebugWithDb;
 use cairo_lang_defs::ids::NamedLanguageElementId;
 use cairo_lang_diagnostics::Maybe;
 use cairo_lang_lowering::ids::SemanticFunctionIdEx;
@@ -156,8 +155,8 @@ pub fn get_concrete_long_type_id(
                 type_id.format(db.upcast())
             )
         }
-        semantic::TypeLongId::Closure(ty) => {
-            user_type_long_id("Struct", format!("{:?}", ty.debug(db.upcast())).into())?.into()
+        semantic::TypeLongId::Closure(_) => {
+            unreachable!("Closure types should have been handled in the lowering stage.")
         }
     })
 }
@@ -202,7 +201,7 @@ pub fn type_dependencies(
         semantic::TypeLongId::Snapshot(ty) => vec![ty],
         semantic::TypeLongId::Coupon(_) => vec![],
         semantic::TypeLongId::Closure(_) => {
-            vec![]
+            unreachable!("Closure types should have been handled in the lowering stage.");
         }
         semantic::TypeLongId::FixedSizeArray { type_id, size } => {
             let size = size

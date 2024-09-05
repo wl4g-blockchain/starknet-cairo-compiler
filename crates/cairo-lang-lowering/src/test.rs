@@ -31,7 +31,6 @@ cairo_lang_test_utils::test_file_test!(
         call :"call",
         constant :"constant",
         coupon :"coupon",
-        closure :"closure",
         cycles :"cycles",
         literal :"literal",
         destruct :"destruct",
