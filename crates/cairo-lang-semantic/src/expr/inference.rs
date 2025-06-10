@@ -299,6 +299,11 @@ pub struct ImplVarTraitItemMappings {
     /// The trait impls of the impl var.
     impls: OrderedHashMap<TraitImplId, ImplId>,
 }
+impl ImplVarTraitItemMappings {
+    pub fn is_empty(&self) -> bool {
+        self.types.is_empty() && self.constants.is_empty() && self.impls.is_empty()
+    }
+}
 impl Hash for ImplVarTraitItemMappings {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.types.iter().for_each(|(trait_type_id, type_id)| {
