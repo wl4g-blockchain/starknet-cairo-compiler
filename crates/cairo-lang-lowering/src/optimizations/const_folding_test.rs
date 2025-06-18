@@ -5,6 +5,7 @@ use cairo_lang_semantic::test_utils::setup_test_function;
 use cairo_lang_test_utils::parse_test_file::TestRunnerResult;
 use cairo_lang_utils::ordered_hash_map::OrderedHashMap;
 
+use crate::inline::apply_inlining;
 use crate::LoweringStage;
 use crate::db::LoweringGroup;
 use crate::fmt::LoweredFormatter;
@@ -38,6 +39,8 @@ fn test_match_optimizer(
 
     let mut before =
         db.lowered_body(function_id, LoweringStage::PreOptimizations).unwrap().deref().clone();
+    let disable_const_folding_during_inlining = true;
+    apply_inlining(db, function_id, &mut before, disable_const_folding_during_inlining);
     OptimizationPhase::ApplyInlining.apply(db, function_id, &mut before).unwrap();
     OptimizationPhase::ReorganizeBlocks.apply(db, function_id, &mut before).unwrap();
     OptimizationPhase::CancelOps.apply(db, function_id, &mut before).unwrap();
